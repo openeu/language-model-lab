@@ -3,7 +3,30 @@ from datasets import Dataset
 import pandas as pd
 from transformers import AutoTokenizer, AutoModel, DataCollatorForLanguageModeling, RobertaConfig, RobertaForMaskedLM, TrainingArguments, Trainer
 from datetime import datetime
+import sys
 
+class Logger:
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+        
+    def isatty(self):
+        return False    
+
+sys.stdout = Logger("output.log")
+
+def read_logs():
+    sys.stdout.flush()
+    with open("output.log", "r") as f:
+        return f.read()
 
 # dataset = Dataset.from_dict({'data': ['no data yet']})
 
@@ -45,7 +68,7 @@ def load_dataset_by_name(dataset_name):
         # samples = sample_from_iterable_dataset(dataset["train"], num_samples_to_get)
         # dropdown_text_column(choices=column_names)
         # df = pd.DataFrame(samples)
-        return df_dataset.sample(10), df_dataset.sample(3)
+        return df_dataset.sample(5), df_dataset.sample(5)
 
     except Exception as e:
         return None
@@ -61,10 +84,10 @@ def pretrain(column_name, hf_model, max_length, progress=gr.Progress(track_tqdm=
     ds_dataset = ds_dataset.rename_column(column_name, "labels")
     shuffled_dataset = ds_dataset.shuffle(seed=42)
     shuffled_dataset = shuffled_dataset.train_test_split(train_size=0.7)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    tokenizer = AutoTokenizer.from_pretrained(hf_model, use_fast=True)
 
     def encode(batch):
-        return tokenizer(batch['labels'], truncation=True, max_length=max_length,return_tensors="pt")
+        return tokenizer(batch['labels'], padding=True, truncation=True, max_length=max_length,return_tensors="pt")
     
     shuffled_dataset["train"].set_transform(encode)
     shuffled_dataset["test"].set_transform(encode)
@@ -121,7 +144,7 @@ def pretrain(column_name, hf_model, max_length, progress=gr.Progress(track_tqdm=
     return "done"
 
 def sample_data():
-    return df_dataset.sample(3)
+    return df_dataset.sample(5)
 
 with gr.Blocks() as demo:
     gr.Markdown('''
@@ -157,13 +180,16 @@ with gr.Blocks() as demo:
         textbox_model_name = gr.Textbox(label='Hugging Face model to start from', placeholder='e.g. bert-base-uncased')
         number_model_max_length = gr.Number(label="Model max token length", value=512)
         btn_pretrain_model = gr.Button('Pretrain model')
-        textbox_pretrain_status = gr.Textbox()
+        textbox_pretrain_status = gr.Textbox(label="Status")
+        textbox_logs = gr.Textbox(label="Logs", lines=5, max_lines=5)
+        
     with gr.Tab('Evaluation'):
         gr.Markdown('Flip text or image files using this demo.')
 
     btn_load_dataset.click(load_dataset_by_name, inputs=[textbox_dataset_name], outputs=[dataframe_dataset, dataframe_processed_dataset])
     dataframe_dataset.change(update_dataset_columns, inputs=[dataframe_dataset], outputs=[dropdown_text_column])
     btn_pretrain_model.click(pretrain, inputs=[dropdown_text_column, textbox_model_name, number_model_max_length], outputs=[textbox_pretrain_status])
+    demo.load(read_logs, None, textbox_logs, every=1)
 
 
 
