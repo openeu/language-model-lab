@@ -1,11 +1,15 @@
 import gradio as gr
-from datasets import Dataset, load_dataset
+from datasets import Dataset
 import pandas as pd
 from transformers import AutoTokenizer, AutoModel, DataCollatorForLanguageModeling, RobertaConfig, RobertaForMaskedLM, TrainingArguments, Trainer
+from datetime import datetime
+
 
 # dataset = Dataset.from_dict({'data': ['no data yet']})
 
 # column_names = []
+df_dataset = []
+df_text = []
 
 
 def update_dataset_columns(df_sample):
@@ -29,24 +33,42 @@ def sample_from_iterable_dataset(dataset, num_samples):
 def load_dataset_by_name(dataset_name):
     print("Load dataset by name")
     try:
-        global dataset
+        global df_dataset
         # if dataset_config not in [None, ""]:
         #     dataset = load_dataset(dataset_name, dataset_config, streaming=True)
         # else:
         #     dataset = load_dataset(dataset_name, streaming=True)
 
-        dataset = load_dataset("parquet", data_files=dataset_name, streaming=True)
-        num_samples_to_get = 10
-        samples = sample_from_iterable_dataset(dataset["train"], num_samples_to_get)
+        # dataset = load_dataset("parquet", data_files=dataset_name, streaming=True)
+        df_dataset = pd.read_parquet(dataset_name)
+        # num_samples_to_get = 10
+        # samples = sample_from_iterable_dataset(dataset["train"], num_samples_to_get)
         # dropdown_text_column(choices=column_names)
-        df = pd.DataFrame(samples)
-        return df
+        # df = pd.DataFrame(samples)
+        return df_dataset.sample(10), df_dataset.sample(3)
 
     except Exception as e:
         return None
 
-def pretrain(hf_model):
+
+
+def pretrain(column_name, hf_model, max_length, progress=gr.Progress(track_tqdm=True)):
+    print("column_name", column_name)
+    print("hf_model", hf_model)
+    print("max_length", max_length)
+    ds_dataset = Dataset.from_pandas(df_dataset, preserve_index=False)
+    ds_dataset = ds_dataset.select_columns(column_name)
+    ds_dataset = ds_dataset.rename_column(column_name, "labels")
+    shuffled_dataset = ds_dataset.shuffle(seed=42)
+    shuffled_dataset = shuffled_dataset.train_test_split(train_size=0.7)
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
+
+    def encode(batch):
+        return tokenizer(batch['labels'], truncation=True, max_length=max_length,return_tensors="pt")
+    
+    shuffled_dataset["train"].set_transform(encode)
+    shuffled_dataset["test"].set_transform(encode)
+
     model = AutoModel.from_pretrained(hf_model)
 
     # Set a configuration for our RoBERTa model
@@ -87,15 +109,19 @@ def pretrain(hf_model):
         model=model,
         args=training_args,
         data_collator=data_collator,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
+        train_dataset=shuffled_dataset["train"],
+        eval_dataset=shuffled_dataset["test"],
         #prediction_loss_only=True,
     )
 
     trainer.train()
-    trainer.save_model('./models/' + hf_model)
+    now = datetime.now()
+    str_datetime = now.strftime("%dd/%mm/%YYYY")
+    trainer.save_model('./models/' + hf_model + "_" + str_datetime)
+    return "done"
 
-
+def sample_data():
+    return df_dataset.sample(3)
 
 with gr.Blocks() as demo:
     gr.Markdown('''
@@ -111,24 +137,33 @@ with gr.Blocks() as demo:
             # textbox_dataset_name = gr.Textbox(label='Hugging Face dataset to use as training data', value='oscar', placeholder='e.g. oscar')
             # textbox_dataset_config_name = gr.Textbox(label='Dataset config (optional)', value='unshuffled_deduplicated_en', placeholder='e.g. unshuffled_deduplicated_en')
         btn_load_dataset = gr.Button('Load dataset')
-        dataframe_dataset = gr.Dataframe(label = 'Dataset')
-        with gr.Row():
-            dropdown_text_column = gr.Dropdown(label="Select text column", allow_custom_value=True, interactive=True)
-        btn_load_dataset.click(load_dataset_by_name, inputs=[textbox_dataset_name], outputs=[dataframe_dataset])
-        dataframe_dataset.change(update_dataset_columns, inputs=[dataframe_dataset], outputs=[dropdown_text_column])
-        # dropdown_text_column.change(update_dataset_columns)
+        dataframe_dataset = gr.Dataframe(label='Dataset', interactive=False, wrap=True)
+        btn_sample_dataset = gr.Button("Sample data")
+        btn_sample_dataset.click(sample_data, outputs=[dataframe_dataset])
+        
 
 
-    with gr.Tab('Preprocessing'):
-        gr.Textbox()
+
+
+    # with gr.Tab('Preprocessing'):
+    #     gr.Textbox()
     
     with gr.Tab('Training'):
-        # global dataset
-        dataframe_processed_dataset = gr.Dataframe(label = 'Processed dataset')
+        dataframe_processed_dataset = gr.Dataframe(label = 'Processed dataset', interactive=False, wrap=True)
+        btn_sample_dataset = gr.Button("Sample data")
+        dropdown_text_column = gr.Dropdown(label="Select column containing text to train on", allow_custom_value=True, interactive=True)
+        btn_sample_dataset.click(sample_data, outputs=[dataframe_processed_dataset])
+
         textbox_model_name = gr.Textbox(label='Hugging Face model to start from', placeholder='e.g. bert-base-uncased')
+        number_model_max_length = gr.Number(label="Model max token length", value=512)
         btn_pretrain_model = gr.Button('Pretrain model')
+        textbox_pretrain_status = gr.Textbox()
     with gr.Tab('Evaluation'):
         gr.Markdown('Flip text or image files using this demo.')
+
+    btn_load_dataset.click(load_dataset_by_name, inputs=[textbox_dataset_name], outputs=[dataframe_dataset, dataframe_processed_dataset])
+    dataframe_dataset.change(update_dataset_columns, inputs=[dataframe_dataset], outputs=[dropdown_text_column])
+    btn_pretrain_model.click(pretrain, inputs=[dropdown_text_column, textbox_model_name, number_model_max_length], outputs=[textbox_pretrain_status])
 
 
 

@@ -2,3 +2,4 @@ gradio
 transformers
 datasets
 ipykernel
+accelerate
